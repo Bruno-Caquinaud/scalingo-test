@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/Scalingo/go-handlers"
 	"github.com/Scalingo/go-utils/logger"
 )
 
@@ -23,8 +22,8 @@ type Owner struct {
 	Login string `json:"login"`
 }
 
-type BodyAnswer struct {
-	repositories []DetailsRepository
+type ApiAnswer struct {
+	Repositories []DetailsRepository `json:"repositories"`
 }
 
 type DetailsRepository struct{
@@ -60,7 +59,7 @@ func callOrganizationEndpoint(org string, answer *[]byte) {
 
 	rawquery := ListOrganizationRepoUrl1.Query()
 	rawquery.Add("type", "public")
-	rawquery.Add("per_page", "100")
+	rawquery.Add("per_page", "3")
 
 	ListOrganizationRepoUrl1.RawQuery = rawquery.Encode()
 	ListOrganizationRepoUrl2 := ListOrganizationRepoUrl1.String()
@@ -143,61 +142,59 @@ func callLanguageEndpoint(urlp string, answer *[]byte) {
 	fmt.Printf("client: response body: %s\n", resBody)
 }
 
-func decodeLanguagesAnswer(answer *[]byte, mapper *map[string]interface{}) {
+func decodeLanguagesAnswer(answer *[]byte, mapper *map[string]int) {
 	if err := json.Unmarshal(*answer, mapper); err != nil {
 		panic(err)
 	}
 }
 
-func processAnswer(reply *[]OrganizationRepositoryAnswer, mapper *map[string]interface{}) {
+func processAnswer(listOrgRepo *[]OrganizationRepositoryAnswer, listLanguagesRepo *[]map[string]int, languageSelected string, apiAnswer * ApiAnswer) {
 
-	if len(*reply) != len(*mapper) {
+	if len(*listOrgRepo) != len(*listLanguagesRepo) {
 		fmt.Printf("len reply and mapper are not the same size")
 		os.Exit(1)
 	}
 
-	var bodyAnswer map[string]interface{}
-	var Languages map[string]interface{}
-
-	bodyAnswer["full_name"] = ""
-	bodyAnswer["owner"] = ""
-	bodyAnswer["repository"] = ""
-	Languages["Languages"] = ""
-
+	for i, currentRepo := range *listOrgRepo {
+		var currentRepoDetails DetailsRepository
+		
+		currentRepoDetails.FullName = currentRepo.FullName
+		currentRepoDetails.Owner = currentRepo.Owner.Login
+		currentRepoDetails.Repository = currentRepo.Name
+		currentRepoDetails.Languages = make(map[string]CodeSize)
+		currentRepoDetails.Languages[languageSelected] = CodeSize{((*listLanguagesRepo)[i])[languageSelected]}
+		
+		(*apiAnswer).Repositories = append((*apiAnswer).Repositories, currentRepoDetails)
+	}
 }
 
 func main() {
 	var org string = "adobe"
 	var answer []byte
 	var objectOrgRepo []OrganizationRepositoryAnswer
-	var LanguagesanswerMapper map[string]interface{}
-
+	var LanguagesanswerMapper []map[string]int
+	var apiAnswer ApiAnswer
+	var selectedLanguage string = "C++"
+	var apiAnswerJson []byte
+	
 	callOrganizationEndpoint(org, &answer)
 	parseOrganizationRepositoriesAnswer(&answer, &objectOrgRepo)
-	callLanguageEndpoint(objectOrgRepo[0].LanguagesUrl, &answer)
-	decodeLanguagesAnswer(&answer, &LanguagesanswerMapper)
-	log := logger.Default()
-	log.Info("Initializing app")
-	cfg, err := newConfig()
-	if err != nil {
-		log.WithError(err).Error("Fail to initialize configuration")
-		os.Exit(1)
+	
+	for _, orgRepo := range objectOrgRepo{
+		var objectAnswer map[string]int
+		callLanguageEndpoint(orgRepo.LanguagesUrl, &answer)
+		decodeLanguagesAnswer(&answer, &objectAnswer)
+		
+		LanguagesanswerMapper = append(LanguagesanswerMapper, objectAnswer)
 	}
-
-	log.Info("Initializing routes")
-	router := handlers.NewRouter(log)
-	router.HandleFunc("/ping", pongHandler)
-	// Initialize web server and configure the following routes:
-	// GET /repos
-	// GET /stats
-
-	log = log.WithField("port", cfg.Port)
-	log.Info("Listening...")
-	err = http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), router)
+	processAnswer(&objectOrgRepo, &LanguagesanswerMapper, selectedLanguage, &apiAnswer)
+	apiAnswerJson, err := json.Marshal(apiAnswer)
+	
 	if err != nil {
-		log.WithError(err).Error("Fail to listen to the given port")
-		os.Exit(2)
+		panic(err)
 	}
+	fmt.Printf("api answer : %s\n", string(apiAnswerJson))
+	return
 }
 
 func pongHandler(w http.ResponseWriter, r *http.Request, _ map[string]string) error {
